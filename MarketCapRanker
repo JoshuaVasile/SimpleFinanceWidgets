@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Market Cap Top 10</title>
+    <style>
+        :root {
+            --bg-color: transparent;
+            --text-color: #ffffff;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 10px;
+        }
+        .widget-container {
+            width: 100%;
+            max-width: 650px;
+            background: rgba(0, 0, 0, 0.6); 
+            border-radius: 12px;
+            padding: 15px;
+            box-sizing: border-box;
+            backdrop-filter: blur(5px);
+        }
+        .widget-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            text-align: center;
+            color: #ccc;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+        }
+        th, td {
+            padding: 10px 8px;
+            text-align: right;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th:nth-child(1), td:nth-child(1) { text-align: center; width: 40px; }
+        th:nth-child(2), td:nth-child(2) { text-align: left; } 
+        th:nth-child(3), td:nth-child(3) { text-align: left; } 
+        
+        th {
+            color: #888;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+        }
+        .rank-badge {
+            background: #444;
+            color: #fff;
+            padding: 3px 6px;
+            border-radius: 50%;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+        .ticker {
+            font-weight: bold;
+            color: #fff;
+            background: rgba(255,255,255,0.1);
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .price { font-weight: bold; }
+        .rsi-high { color: #ff5252; } 
+        .rsi-low { color: #4CAF50; }  
+        .loading { text-align: center; font-style: italic; color: #888; }
+    </style>
+</head>
+<body>
+
+<div class="widget-container">
+    <div class="widget-title">Live Top 10 US Companies</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Rank</th>
+                <th>Company</th>
+                <th>Ticker</th>
+                <th>Price</th>
+                <th>Market Cap</th>
+                <th>RSI (14)</th>
+            </tr>
+        </thead>
+        <tbody id="stock-data">
+            <tr><td colspan="6" class="loading">Scanning market for Top 10...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // ==========================================
+    // 1. PASTE YOUR FREE FMP API KEY HERE
+    // ==========================================
+    const fmpApiKey = 'YOUR_API_KEY_HERE'; 
+    
+    const proxy = 'https://api.allorigins.win/raw?url=';
+
+    function formatMarketCap(num) {
+        if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T';
+        if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+        if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+        return num.toLocaleString();
+    }
+
+    function calculateRSI(closes) {
+        if (closes.length < 15) return 'N/A';
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= 14; i++) {
+            const diff = closes[i] - closes[i - 1];
+            if (diff >= 0) gains += diff;
+            else losses -= diff;
+        }
+        let avgGain = gains / 14;
+        let avgLoss = losses / 14;
+
+        for (let i = 15; i < closes.length; i++) {
+            const diff = closes[i] - closes[i - 1];
+            if (diff >= 0) {
+                avgGain = (avgGain * 13 + diff) / 14;
+                avgLoss = (avgLoss * 13) / 14;
+            } else {
+                avgGain = (avgGain * 13) / 14;
+                avgLoss = (avgLoss * 13 - diff) / 14;
+            }
+        }
+        if (avgLoss === 0) return 100;
+        const rs = avgGain / avgLoss;
+        return (100 - (100 / (1 + rs))).toFixed(1);
+    }
+
+    async function fetchStockData() {
+        if (fmpApiKey === 'YOUR_API_KEY_HERE') {
+            document.getElementById('stock-data').innerHTML = `<tr><td colspan="6" style="color:red; text-align:center;">Please add your FMP API Key to the code.</td></tr>`;
+            return;
+        }
+
+        try {
+            const fmpUrl = `https://financialmodelingprep.com/api/v3/stock-screener?marketCapMoreThan=200000000000&country=US&isEtf=false&isFund=false&limit=50&apikey=${fmpApiKey}`;
+            const fmpRes = await fetch(fmpUrl);
+            let screenerData = await fmpRes.json();
+
+            screenerData.sort((a, b) => b.marketCap - a.marketCap);
+            const top10Companies = screenerData.slice(0, 10);
+            const top10Symbols = top10Companies.map(c => c.symbol);
+
+            const symbolString = top10Symbols.join(',');
+            const quoteUrl = encodeURIComponent(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbolString}`);
+            const quoteRes = await fetch(proxy + quoteUrl);
+            const quoteData = await quoteRes.json();
+            let quotes = quoteData.quoteResponse.result;
+
+            const chartPromises = top10Symbols.map(sym => {
+                const chartUrl = encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1mo`);
+                return fetch(proxy + chartUrl).then(res => res.json());
+            });
+
+            const chartsData = await Promise.all(chartPromises);
+            let finalData = [];
+
+            top10Symbols.forEach((symbol, index) => {
+                const quote = quotes.find(q => q.symbol === symbol);
+                if (!quote) return;
+
+                let rsi = 'N/A';
+                const chartInfo = chartsData[index]?.chart?.result?.[0];
+                if (chartInfo && chartInfo.indicators.quote[0].close) {
+                    const closePrices = chartInfo.indicators.quote[0].close.filter(p => p !== null);
+                    rsi = calculateRSI(closePrices);
+                }
+
+                finalData.push({
+                    mcRank: index + 1, 
+                    name: quote.shortName || quote.longName || top10Companies[index].companyName,
+                    ticker: quote.symbol,
+                    price: quote.regularMarketPrice,
+                    marketCap: quote.marketCap,
+                    rsi: rsi
+                });
+            });
+
+            finalData.sort((a, b) => b.price - a.price);
+
+            const tbody = document.getElementById('stock-data');
+            tbody.innerHTML = ''; 
+
+            finalData.forEach(stock => {
+                let rsiClass = '';
+                if (stock.rsi !== 'N/A') {
+                    if (stock.rsi >= 70) rsiClass = 'rsi-high'; 
+                    if (stock.rsi <= 30) rsiClass = 'rsi-low';  
+                }
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><span class="rank-badge">${stock.mcRank}</span></td>
+                    <td>${stock.name.length > 15 ? stock.name.substring(0,15) + '...' : stock.name}</td>
+                    <td><span class="ticker">${stock.ticker}</span></td>
+                    <td class="price">$${stock.price.toFixed(2)}</td>
+                    <td>$${formatMarketCap(stock.marketCap)}</td>
+                    <td class="${rsiClass}">${stock.rsi}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+        } catch (error) {
+            console.error('Error fetching stock data:', error);
+            document.getElementById('stock-data').innerHTML = `<tr><td colspan="6" style="color:red; text-align:center;">Failed to load data. API may be temporarily unavailable.</td></tr>`;
+        }
+    }
+
+    fetchStockData();
+    // Refresh data every 24 hours (86,400,000 milliseconds)
+    setInterval(fetchStockData, 86400000);
+</script>
+</body>
+</html>
